@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:amq="http://activemq.apache.org/schema/core"
+       xmlns:camel="http://camel.apache.org/schema/spring"
+
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+         http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+
+    <!-- xsi:schemaLocation="http://www.springframework.org/schema/beans
+                            http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+                            http://camel.apache.org/schema/spring/camel-spring-2.14.1.xsd
+                            http://activemq.apache.org/schema/core
+                            http://activemq.apache.org/schema/core/activemq-core.xsd
+                            http://www.springframework.org/schema/beans
+                            http://camel.apache.org/schema/spring"-->
+
+    <bean id="properties" class="org.apache.camel.component.properties.PropertiesComponent">
+        <property name="location" value="classpath:camel.properties"/>
+    </bean>
+
+    <bean id="DS18B20" class="io.silverspoon.oxpresso.DS18B20"></bean>
+
+    <bean id="BrewSettings" class="io.silverspoon.oxpresso.BrewSettings"></bean>
+    <bean id="PID" class="io.silverspoon.oxpresso.PID"></bean>
+
+    <!-- jetty static web content -->
+    <bean id="staticHandler" class="org.eclipse.jetty.server.handler.ResourceHandler">
+        <property name="resourceBase" value="webapp"/>
+    </bean>
+
+
+    <camelContext trace="false" xmlns="http://camel.apache.org/schema/spring">
+
+        <restConfiguration bindingMode="json" component="jetty" host="{{serverAddress}}" port="8080"  enableCORS="false"></restConfiguration>
+        <rest >
+            <post consumes="application/json" produces="application/json" uri="/rest/search">
+                <to uri="direct:searchMediator"></to>
+            </post>
+        </rest>
+
+        <!-- Route activates jetty for static web content -->
+        <route>
+            <from uri="jetty:http://{{serverAddress}}:8080?handlers=#staticHandler"/>
+            <log message="XXX ${body} XXX" loggingLevel="INFO"/>
+            <!--to uri="mock:empty"/-->
+        </route>
+
+
+        <!-- Route reads temperature sensors -->
+        <route autoStartup="true" customId="true" id="read-sensor">
+            <from uri="file:///home/ppecka/sys/bus/w1/devices?idempotent=false&amp;noop=true&amp;fileName=w1_slave&amp;recursive=true&amp;maxDepth=2&amp;delay=1000"/>
+            <pipeline>
+                <!--bean ref="DS18B20" method="getSensorID"/-->
+                <bean ref="DS18B20" method="transform"/>
+                <!--log message="${body}" loggingLevel="INFO"/-->
+                <marshal>
+                    <json library="Jackson"/>
+                </marshal>
+                <!--log message="JSON ${body}" loggingLevel="INFO"/-->
+            </pipeline>
+            <to uri="mqtt:foo?publishTopicName=currentTemp&amp;host=tcp://{{serverAddress}}:1883/&amp;qualityOfService=AtMostOnce"/>
+        </route>
+
+
+
+        <route autoStartup="true" customId="true" id="brew-Command">
+            <from uri="mqtt:foo?subscribeTopicName=brewCommands&amp;host=tcp://{{serverAddress}}:1883/&amp;qualityOfService=ExactlyOnce"/>
+            <log message="Brew Command: ${body}" loggingLevel="INFO"/>
+            <choice>
+                <when>
+                    <simple>${body} == 'getCurrentSettings'</simple>
+                    <bean ref="BrewSettings" method="getCurrentSettings"/>
+                    <marshal>
+                        <json library="Jackson"/>
+                    </marshal>
+                    <to uri="mqtt:foo?publishTopicName=brewStatus&amp;host=tcp://{{serverAddress}}:1883/&amp;qualityOfService=AtMostOnce"/>
+                </when>
+                <when>
+                    <simple>${body} == '#espresso' || ${body} == '#steam' || ${body} == '#tea' || ${body} == '#sleep' || ${body} == '#hibernate'</simple>
+                    <bean ref="PID" method="runCommand"></bean>
+                </when>
+                <otherwise>
+                    <!--unmarshal>
+                        <json library="Jackson"/>
+                    </unmarshal-->
+                    <bean ref="BrewSettings" method="updateSettings"/>
+                </otherwise>
+
+            </choice>
+
+        </route>
+
+
+
+        <route autoStartup="false" customId="true" id="PIDcontroller">
+            <from uri="quartz2://pidTimer?trigger.repeatInterval=150"/>
+            <to uri="bean:PID?method=controllLoop"/>
+        </route>
+
+        <route autoStartup="false" customId="true" id="consumer-route">
+
+            <!--from uri="mqtt:foo?subscribeTopicName=brewStatus&amp;host=tcp://{{serverAddress}}:1883/&amp;qualityOfService=ExactlyOnce"/-->
+            <!--from uri="mqtt:foo?subscribeTopicName=brewCommands&amp;host=tcp://{{serverAddress}}:1883/&amp;qualityOfService=ExactlyOnce"/-->
+            <from uri="mqtt:foo?subscribeTopicName=currentTemp&amp;host=tcp://{{serverAddress}}:1883/&amp;qualityOfService=ExactlyOnce"/>
+            <log message="MQTT ${body}" loggingLevel="INFO"/>
+            <!-- to uri="file:///tmp/out"/-->
+        </route>
+    </camelContext>
+
+
+</beans>

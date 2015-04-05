@@ -1,0 +1,12 @@
+#ex1Slider .slider-selection {
+	background: #BABABA;
+}
+
+#status {
+    width: 200px;
+    padding: 5px;
+    display: inline-block;
+    text-align: center;
+    margin: 10px;
+}
+

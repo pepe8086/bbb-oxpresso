@@ -1,0 +1,1 @@
+{"temperatureSettings":{"steam":{"value":"125","min":"105","max":"130","step":"0.1","type":"range"},"coffee":{"value":"96","min":"80","max":"99","step":"0.1","type":"range"}},"sensorMapper":{"boilerTemp":"28-000004e340001","brewHeadTemp":"28-000004e340210"}}
